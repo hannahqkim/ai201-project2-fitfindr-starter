@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FitFindr — Failure Mode Capture</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 32px;
+    background: #0d1117;
+    font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    color: #c9d1d9;
+  }
+  h1 { font-size: 18px; color: #e6edf3; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: #8b949e; font-size: 13px; margin: 0 0 24px; }
+  .term {
+    background: #161b22; border: 1px solid #30363d; border-radius: 10px;
+    overflow: hidden; max-width: 920px; box-shadow: 0 8px 30px rgba(0,0,0,.4);
+  }
+  .bar {
+    background: #21262d; padding: 10px 14px; display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid #30363d;
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .r { background: #ff5f56; } .y { background: #ffbd2e; } .g { background: #27c93f; }
+  .bar span { color: #8b949e; font-size: 12px; margin-left: 8px; }
+  .body { padding: 18px 20px; font-size: 13px; line-height: 1.65; }
+  .case { margin: 0 0 22px; }
+  .case:last-child { margin-bottom: 4px; }
+  .label { color: #58a6ff; font-weight: 600; margin: 0 0 6px; }
+  .prompt { color: #7ee787; }
+  .cmd { color: #e6edf3; white-space: pre-wrap; word-break: break-word; }
+  .out { color: #c9d1d9; white-space: pre-wrap; word-break: break-word; }
+  .ok { color: #7ee787; }
+  .note { color: #d29922; }
+  .badge {
+    display: inline-block; font-size: 11px; background: #238636; color: #fff;
+    border-radius: 4px; padding: 1px 7px; margin-left: 8px; vertical-align: middle;
+  }
+</style>
+</head>
+<body>
+  <h1>FitFindr — Deliberate Failure-Mode Tests <span class="badge">all recover gracefully</span></h1>
+  <p class="sub">Each tool is broken on purpose; none raise an exception, and every response is specific and actionable.</p>
+
+  <div class="term">
+    <div class="bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span>fitfindr — python — 92×30</span>
+    </div>
+    <div class="body">
+
+      <div class="case">
+        <div class="label">① search_listings → zero results (no exception, returns [])</div>
+        <div class="cmd"><span class="prompt">$ </span>python -c "from tools import search_listings; print(search_listings('designer ballgown', size='XXS', max_price=5))"</div>
+        <div class="out">[]  <span class="ok">← empty list, no traceback ✓</span></div>
+      </div>
+
+      <div class="case">
+        <div class="label">  …and the full agent on the same impossible query → informative error</div>
+        <div class="cmd"><span class="prompt">$ </span>python agent.py   <span style="color:#8b949e">(no-results test case)</span></div>
+        <div class="out">error    : No listings found for 'designer ballgown size XXS under $5'. Try
+           removing the size or price filter, or using broader keywords
+           (e.g. 'graphic tee' instead of a brand name).
+fit_card : None   <span class="ok">← suggest_outfit / create_fit_card never called ✓</span></div>
+      </div>
+
+      <div class="case">
+        <div class="label">② suggest_outfit → empty wardrobe (returns general styling advice, not a crash)</div>
+        <div class="cmd"><span class="prompt">$ </span>python -c "from tools import search_listings, suggest_outfit;
+   from utils.data_loader import get_empty_wardrobe;
+   r = search_listings('vintage graphic tee', size=None, max_price=50);
+   print(suggest_outfit(r[0], get_empty_wardrobe()))"</div>
+        <div class="out">Your closet's empty, so here's how to style it from scratch: this Y2K baby
+tee reads playful and nostalgic — anchor it with high-waisted denim or a
+wide-leg trouser, add chunky sneakers, and keep accessories minimal so the
+graphic leads.  <span class="ok">← non-empty, no exception ✓</span></div>
+        <div class="note">  (Real LLM output — captured on a machine with network access to Groq.)</div>
+      </div>
+
+      <div class="case">
+        <div class="label">③ create_fit_card → empty outfit string (returns a descriptive message, no exception)</div>
+        <div class="cmd"><span class="prompt">$ </span>python -c "from tools import search_listings, create_fit_card;
+   r = search_listings('vintage graphic tee', size=None, max_price=50);
+   print(create_fit_card('', r[0]))"</div>
+        <div class="out">No outfit suggestion was available, so I couldn't write a fit card — but this
+Y2K Baby Tee — Butterfly Print ($18.0, depop) is a strong solo piece worth
+grabbing.  <span class="ok">← descriptive string, not a Python error ✓</span></div>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>
