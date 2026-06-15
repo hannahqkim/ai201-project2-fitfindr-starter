@@ -19,7 +19,7 @@ Searches the 40-item mock listings dataset (`utils/data_loader.load_listings()`)
 
 **Input parameters:**
 - `description` (str): Free-text keywords describing the item the user wants, e.g. `"vintage graphic tee"`. Lowercased and split into tokens for scoring against each listing's `title`, `description`, and `style_tags`.
-- `size` (str | None): A size string to filter by, e.g. `"M"`. Matching is case-insensitive and substring-based so `"M"` matches `"S/M"`. `None` skips size filtering entirely.
+- `size` (str | None): A size string to filter by, e.g. `"M"`. Matching is case-insensitive and **token-based, not raw substring**, to avoid false positives: each listing's `size` is split on `/`, whitespace, and parentheses into tokens (so `"S/M"` → `["S","M"]`, `"XL (oversized)"` → `["XL","oversized"]`, `"US 8"` → `["US","8"]`), and a listing passes only if the requested size equals one of those tokens. This means `"M"` matches `"S/M"` and `"M/L"` but **not** `"XL"` (different token) and not unrelated strings that merely contain the letter, like the `"S"` in `"US 8"` or `"One Size"`. Numeric requests work the same way (`"8"` matches the `"8"` token in `"US 8"`). `None` skips size filtering entirely.
 - `max_price` (float | None): Inclusive price ceiling. A listing passes only if `listing["price"] <= max_price`. `None` skips price filtering.
 
 **What it returns:**
@@ -225,7 +225,7 @@ Write out what a full user interaction looks like from start to finish — tool 
 
 **Step 0 — Initialize & parse:** `run_agent` builds a fresh `session`. The parse step extracts `description="vintage graphic tee"`, `size=None` (no size stated), `max_price=30.0` (from "under $30") and stores them in `session["parsed"]`. (The "baggy jeans / chunky sneakers" detail comes from the wardrobe, not the search query.)
 
-**Step 1 — search_listings:** The loop calls `search_listings("vintage graphic tee", None, 30.0)`. It filters out everything over $30, scores the rest by keyword overlap, and returns a ranked list. The top hit is `lst_002` — *"Y2K Baby Tee — Butterfly Print"*, `$18.00`, style_tags `["y2k","vintage","graphic tee","cottagecore"]`, platform `depop`. The list is non-empty, so `session["search_results"]` is set and the loop does **not** take the error branch.
+**Step 1 — search_listings:** The loop calls `search_listings("vintage graphic tee", None, 30.0)`. It filters out everything over $30, scores the rest by keyword overlap, and returns a ranked list. Several items match all three tokens — e.g. `lst_002` *"Y2K Baby Tee"* ($18), `lst_006` *"Graphic Tee — 2003 Tour Bootleg Style"* ($24), and `lst_033` *"Vintage Band Tee"* ($19) all carry the `"graphic tee"` and `"vintage"` tags. *Which one ranks first is determined by the scoring function I implement in Milestone 3, so the exact top hit here is illustrative; I'll re-confirm it against real output once `search_listings` exists.* For this walkthrough assume the top hit is `lst_002` — `$18.00`, style_tags `["y2k","vintage","graphic tee","cottagecore"]`, platform `depop`. The list is non-empty, so `session["search_results"]` is set and the loop does **not** take the error branch.
 
 **Step 2 — select:** The loop sets `session["selected_item"] = search_results[0]` (the $18 Y2K butterfly tee).
 
