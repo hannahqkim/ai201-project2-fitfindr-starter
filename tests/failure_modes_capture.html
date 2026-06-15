@@ -71,11 +71,12 @@ fit_card : None   <span class="ok">← suggest_outfit / create_fit_card never ca
    from utils.data_loader import get_empty_wardrobe;
    r = search_listings('vintage graphic tee', size=None, max_price=50);
    print(suggest_outfit(r[0], get_empty_wardrobe()))"</div>
-        <div class="out">Your closet's empty, so here's how to style it from scratch: this Y2K baby
-tee reads playful and nostalgic — anchor it with high-waisted denim or a
-wide-leg trouser, add chunky sneakers, and keep accessories minimal so the
-graphic leads.  <span class="ok">← non-empty, no exception ✓</span></div>
-        <div class="note">  (Real LLM output — captured on a machine with network access to Groq.)</div>
+        <div class="out">&lt;run this on your Mac to capture the real general-advice text&gt;
+The empty-wardrobe branch builds a "general styling advice" prompt and calls
+the LLM — it returns concrete advice for the piece's vibe without inventing
+items you don't own.  <span class="ok">← non-empty string, no exception ✓</span></div>
+        <div class="note">  Note: paste your own Mac run here. (Off-network, this same call still
+  recovers gracefully via the fallback string — never an exception.)</div>
       </div>
 
       <div class="case">
