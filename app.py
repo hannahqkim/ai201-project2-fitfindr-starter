@@ -63,13 +63,20 @@ def handle_query(user_query: str, wardrobe_choice: str) -> tuple[str, str, str]:
     # 5. Success path: format the selected listing for the first panel.
     item = session["selected_item"]
     brand = item.get("brand") or "—"
-    listing_text = (
-        f"{item['title']}\n"
-        f"${item['price']:.2f} · {item['platform']}\n"
-        f"Condition: {item['condition']} · Size: {item['size']}\n"
-        f"Brand: {brand}\n"
-        f"Style: {', '.join(item.get('style_tags', []))}"
-    )
+    lines = []
+    # Stretch: if the search loosened constraints, tell the user up front.
+    if session.get("search_note"):
+        lines.append(f"ℹ️ {session['search_note']}\n")
+    lines.append(item["title"])
+    lines.append(f"${item['price']:.2f} · {item['platform']}")
+    lines.append(f"Condition: {item['condition']} · Size: {item['size']}")
+    lines.append(f"Brand: {brand}")
+    lines.append(f"Style: {', '.join(item.get('style_tags', []))}")
+    # Stretch: price-fairness verdict.
+    price_check = session.get("price_check")
+    if price_check and price_check.get("verdict") != "unknown":
+        lines.append(f"\n💰 {price_check['message']}")
+    listing_text = "\n".join(lines)
     return listing_text, session["outfit_suggestion"], session["fit_card"]
 
 

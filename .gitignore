@@ -14,3 +14,6 @@ env/
 
 # macOS
 .DS_Store
+
+# Saved user style profiles (stretch feature) — local user data
+data/profiles/

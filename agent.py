@@ -20,7 +20,13 @@ Usage (once implemented):
 
 import re
 
-from tools import search_listings, suggest_outfit, create_fit_card
+from tools import (
+    search_listings,
+    suggest_outfit,
+    create_fit_card,
+    estimate_price_fairness,
+)
+from utils.profile_store import get_remembered_wardrobe, save_profile
 
 
 # ── query parsing ─────────────────────────────────────────────────────────────
@@ -103,12 +109,59 @@ def _new_session(query: str, wardrobe: dict) -> dict:
         "outfit_suggestion": None,   # string returned by suggest_outfit
         "fit_card": None,            # string returned by create_fit_card
         "error": None,               # set if the interaction ended early
+        # ── stretch-feature fields ──
+        "adjustments": [],           # retry: constraints that were loosened
+        "search_note": None,         # retry: human sentence about loosening
+        "price_check": None,         # price-fairness verdict dict for selected_item
     }
+
+
+# ── retry with fallback (stretch) ─────────────────────────────────────────────
+
+def _search_with_fallback(parsed: dict) -> tuple[list[dict], list[str]]:
+    """Search, loosening constraints if nothing matches.
+
+    Escalation order (size is dropped before price, since the dataset's size
+    strings are the most common cause of a zero-match):
+        1. full constraints (description, size, max_price)
+        2. drop size       (description, None, max_price)   [if a size was set]
+        3. drop price too  (description, None, None)         [if a price was set]
+
+    Returns (results, adjustments) where `adjustments` lists, in plain English,
+    what was loosened to get those results. Empty adjustments = exact match.
+    """
+    description = parsed["description"]
+    size = parsed["size"]
+    max_price = parsed["max_price"]
+
+    # Attempt 1 — exactly what the user asked for.
+    results = search_listings(description, size, max_price)
+    if results:
+        return results, []
+
+    adjustments: list[str] = []
+
+    # Attempt 2 — drop the size filter.
+    if size is not None:
+        adjustments.append(f"removed the size filter ({size})")
+        results = search_listings(description, None, max_price)
+        if results:
+            return results, adjustments
+
+    # Attempt 3 — drop the price filter too.
+    if max_price is not None:
+        adjustments.append(f"removed the price filter (${max_price:.0f})")
+        results = search_listings(description, None, None)
+        if results:
+            return results, adjustments
+
+    # Nothing worked even fully loosened.
+    return [], adjustments
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
 
-def run_agent(query: str, wardrobe: dict) -> dict:
+def run_agent(query: str, wardrobe: dict | None = None, *, user_id: str | None = None) -> dict:
     """
     Main agent entry point. Runs the FitFindr planning loop for a single
     user interaction and returns the completed session dict.
@@ -118,6 +171,10 @@ def run_agent(query: str, wardrobe: dict) -> dict:
                   (e.g., "vintage graphic tee under $30, size M")
         wardrobe: User's wardrobe dict — use get_example_wardrobe() or
                   get_empty_wardrobe() from utils/data_loader.py
+        user_id:  Optional (stretch: style memory). If given and `wardrobe` is
+                  empty/None, the user's remembered wardrobe is loaded from disk.
+                  If given alongside a non-empty wardrobe, that wardrobe is saved
+                  for next time. Omit it for the plain core behavior.
 
     Returns:
         The session dict after the interaction completes. Check session["error"]
@@ -153,6 +210,19 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
+    # Stretch (style memory): resolve the wardrobe from saved profile if needed.
+    if user_id is not None:
+        if not (wardrobe or {}).get("items"):
+            remembered = get_remembered_wardrobe(user_id)
+            if remembered is not None:
+                wardrobe = remembered
+        elif wardrobe and wardrobe.get("items"):
+            # A real wardrobe was supplied — remember it for next session.
+            try:
+                save_profile(user_id, wardrobe)
+            except OSError:
+                pass  # persistence failure must never break a run
+
     # Step 1: fresh session — the single source of truth for this interaction.
     session = _new_session(query, wardrobe)
 
@@ -160,22 +230,28 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     session["parsed"] = _parse_query(query)
     parsed = session["parsed"]
 
-    # Step 3: search. Store results, then branch on whether anything matched.
-    session["search_results"] = search_listings(
-        parsed["description"], parsed["size"], parsed["max_price"]
-    )
+    # Step 3: search, with retry-on-empty that loosens constraints (stretch).
+    session["search_results"], session["adjustments"] = _search_with_fallback(parsed)
+    if session["adjustments"]:
+        session["search_note"] = (
+            "No exact match, so I " + " and ".join(session["adjustments"]) + "."
+        )
     if not session["search_results"]:
-        # Early exit: no matches -> set error and STOP. Do not call the LLM
-        # tools with empty input. outfit_suggestion / fit_card stay None.
+        # Early exit: even fully loosened, nothing matched -> set error and STOP.
+        # Do not call the LLM tools with empty input; outputs stay None.
         session["error"] = (
-            f"No listings found for '{query}'. Try removing the size or price "
-            f"filter, or using broader keywords (e.g. 'graphic tee' instead of "
-            f"a brand name)."
+            f"No listings found for '{query}', even after loosening the size "
+            f"and price filters. Try broader keywords (e.g. 'graphic tee' "
+            f"instead of a brand name)."
         )
         return session
 
     # Step 4: select the top-ranked match.
     session["selected_item"] = session["search_results"][0]
+
+    # Step 4b (stretch): judge whether the price is fair vs. comparable items.
+    # Non-fatal context — a "unknown" verdict never stops the run.
+    session["price_check"] = estimate_price_fairness(session["selected_item"])
 
     # Step 5: suggest an outfit from the selected item + wardrobe.
     #         (self-handles the empty-wardrobe case; always returns a string.)

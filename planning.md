@@ -66,7 +66,25 @@ Guards against an empty or whitespace-only `outfit` up front and, in that case, 
 
 ### Additional Tools (if any)
 
-None for the core build. (Stretch idea: a `parse_query` LLM helper that turns the raw query into `{description, size, max_price}`; for now parsing lives inline in the planning loop — see State Management.)
+Core build uses only the three tools above. Parsing the raw query into `{description, size, max_price}` lives inline in the planning loop (`_parse_query`, regex-based — see State Management), not as a separate tool.
+
+**Stretch — Tool 4: `estimate_price_fairness`** (implemented; see Stretch Features section for full design).
+
+---
+
+### Tool 4 (stretch): estimate_price_fairness
+
+**What it does:**
+A pure local tool (no LLM) that judges whether a listing's price is fair by comparing it to similar items already in the dataset — same `category` and sharing at least one `style_tag`. Lets FitFindr tell the user "this is a great deal" / "fairly priced" / "a bit high vs. similar pieces."
+
+**Input parameters:**
+- `item` (dict): One listing dict (normally `session["selected_item"]`). Uses its `id` (to exclude itself), `category`, `style_tags`, `price`, and `title`.
+
+**What it returns:**
+A `dict` with: `verdict` (str: `"great deal"` / `"fair price"` / `"priced high"` / `"unknown"`), `message` (str, human-readable one-liner), `item_price` (float), `comparable_count` (int), `median_price` (float | None), `min_price` (float | None), `max_price` (float | None). Never raises.
+
+**What happens if it fails or returns nothing:**
+If fewer than 2 comparable listings exist, it returns `verdict="unknown"` with a message explaining there isn't enough comparable data — it does not guess or raise. Otherwise it compares `item_price` to the median of comparables: `<= 0.85×` median → great deal, within `±15%` → fair, `> 1.15×` → priced high.
 
 ---
 
@@ -236,3 +254,66 @@ Write out what a full user interaction looks like from start to finish — tool 
 **Step 5 — return:** `session["error"]` is `None` and all three outputs are populated, so the loop returns `session`.
 
 **Final output to user:** The Gradio UI shows three panels — (1) the listing: *Y2K Baby Tee — Butterfly Print, $18.00, depop, condition: excellent*; (2) the outfit suggestion text from Step 3; (3) the shareable fit-card caption from Step 4.
+
+---
+
+## Stretch Features
+
+Three stretch features are implemented. Each is designed to keep the core
+pipeline intact — they add to the `session` dict and the planning loop rather
+than rewrite it.
+
+### A. Price comparison tool (`estimate_price_fairness`)
+
+Full spec in the *Tool 4* block above. **Wiring:** after the loop selects
+`selected_item` (Step 4 of the loop), it calls `estimate_price_fairness(selected_item)`
+and stores the result dict in `session["price_check"]`. This is non-fatal — if
+it can't judge (too few comparables) the run continues normally; the verdict is
+extra context the UI can surface. It runs *before* the LLM tools so the fit card
+prompt could optionally mention the deal.
+
+### B. Retry with fallback (loosen constraints on empty search)
+
+**Change to the planning loop's Step 3.** Instead of erroring the instant
+`search_listings` returns `[]`, the loop escalates through looser searches and
+records what it changed:
+
+1. Attempt 1 — full constraints: `(description, size, max_price)`.
+2. If empty and a `size` was set → Attempt 2 drops size: `(description, None, max_price)`. Note: *"removed the size filter (M)"*.
+3. If still empty and a `max_price` was set → Attempt 3 drops price too: `(description, None, None)`. Note: *"removed the price filter ($30)"*.
+
+Size is dropped before price because the dataset's size strings are messy and
+the most common cause of a zero-match. The first attempt that returns results
+wins; its results become `session["search_results"]` and the loop continues
+normally. The list of adjustments is stored in `session["adjustments"]` (and a
+human sentence in `session["search_note"]`) so the UI can tell the user *"No
+exact match, so I removed the size filter (M) — here's the closest find."* Only
+if **every** attempt is empty does the loop set `session["error"]` and stop, as
+before. `_search_with_fallback(parsed)` encapsulates this and returns
+`(results, adjustments)`.
+
+**Why this is a real planning decision:** the agent's behavior now varies three
+ways on the same code path — exact match, relaxed match (with disclosure), or
+genuine no-match — based entirely on what the tool returned.
+
+### C. Style profile memory (cross-session)
+
+A small persistence layer (`utils/profile_store.py`) so a returning user doesn't
+re-enter their wardrobe.
+
+- **Storage:** one JSON file per user at `data/profiles/<user_id>.json` holding
+  `{user_id, wardrobe, style_preferences, updated_at}`. `style_preferences` is
+  derived by counting `style_tags` across the wardrobe and keeping the most
+  common (so the agent "remembers" the user leans, e.g., vintage/streetwear).
+- **API:** `save_profile(user_id, wardrobe)`, `load_profile(user_id)`,
+  `get_remembered_wardrobe(user_id)`, `derive_style_preferences(wardrobe)`.
+- **Hook in `run_agent`:** signature gains an optional keyword `user_id=None`
+  (backward compatible — existing `run_agent(query, wardrobe)` calls are
+  unchanged). If `wardrobe` is empty/None and a `user_id` is given, the loop
+  loads the remembered wardrobe. If a wardrobe *is* supplied with a `user_id`,
+  it is saved for next time. Failure to read/write a profile never breaks a run
+  — it falls back to the passed (or empty) wardrobe.
+
+**Failure handling:** a corrupt or missing profile file returns `None` from
+`load_profile` rather than raising; the run proceeds with whatever wardrobe was
+passed.

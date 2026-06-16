@@ -14,6 +14,7 @@ Tools:
 
 import os
 import re
+import statistics
 
 from dotenv import load_dotenv
 from groq import Groq
@@ -333,3 +334,97 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
         return result if result.strip() else fallback
     except Exception:
         return fallback
+
+
+# ── Tool 4 (stretch): estimate_price_fairness ─────────────────────────────────
+
+def estimate_price_fairness(item: dict) -> dict:
+    """
+    Estimate whether a listing's price is fair vs. comparable items in the
+    dataset. Pure local function — no LLM, never raises.
+
+    "Comparable" = a different listing in the same category that shares at least
+    one style_tag with `item`. The item's price is compared to the median of
+    those comparables.
+
+    Args:
+        item: A listing dict (typically the selected search result). Uses its
+              id, category, style_tags, price, and title.
+
+    Returns:
+        A dict with:
+            verdict          (str): "great deal" | "fair price" | "priced high"
+                                    | "unknown"
+            message          (str): human-readable one-liner
+            item_price       (float)
+            comparable_count (int)
+            median_price     (float | None)
+            min_price        (float | None)
+            max_price        (float | None)
+
+        If fewer than 2 comparables exist, verdict is "unknown" and the price
+        stats are None — it does not guess.
+    """
+    item_price = float(item.get("price", 0.0))
+    item_id = item.get("id")
+    category = item.get("category")
+    item_tags = set(item.get("style_tags", []) or [])
+
+    comparables = []
+    for other in load_listings():
+        if other.get("id") == item_id:
+            continue
+        if other.get("category") != category:
+            continue
+        if not item_tags.intersection(other.get("style_tags", []) or []):
+            continue
+        comparables.append(other)
+
+    prices = [float(c["price"]) for c in comparables]
+
+    # Not enough data to judge -> say so honestly rather than guess.
+    if len(prices) < 2:
+        return {
+            "verdict": "unknown",
+            "message": (
+                f"Not enough comparable listings to judge the ${item_price:.0f} "
+                f"price (found {len(prices)})."
+            ),
+            "item_price": item_price,
+            "comparable_count": len(prices),
+            "median_price": None,
+            "min_price": None,
+            "max_price": None,
+        }
+
+    median_price = statistics.median(prices)
+    ratio = item_price / median_price if median_price else 1.0
+
+    if ratio <= 0.85:
+        verdict = "great deal"
+        message = (
+            f"Great deal — ${item_price:.0f} is below the ${median_price:.0f} "
+            f"median for {len(prices)} similar pieces."
+        )
+    elif ratio <= 1.15:
+        verdict = "fair price"
+        message = (
+            f"Fairly priced — ${item_price:.0f} is right around the "
+            f"${median_price:.0f} median for similar pieces."
+        )
+    else:
+        verdict = "priced high"
+        message = (
+            f"A bit high — ${item_price:.0f} is above the ${median_price:.0f} "
+            f"median for {len(prices)} similar pieces."
+        )
+
+    return {
+        "verdict": verdict,
+        "message": message,
+        "item_price": item_price,
+        "comparable_count": len(prices),
+        "median_price": median_price,
+        "min_price": min(prices),
+        "max_price": max(prices),
+    }
